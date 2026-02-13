@@ -22,12 +22,12 @@
 /**
  * @brief Timeout in seconds.
  */
-#define TIMEOUT (2)
+#define TIMEOUT (5)
 
 /**
  * @brief Threshold in degrees per second.
  */
-#define THRESHOLD (3.0f)
+#define THRESHOLD (5.0f)
 
 //------------------------------------------------------------------------------
 // Functions

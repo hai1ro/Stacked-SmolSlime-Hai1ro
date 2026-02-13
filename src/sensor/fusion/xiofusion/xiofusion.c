@@ -36,7 +36,7 @@ static int gyro_sanity = 0;
 
 LOG_MODULE_REGISTER(fusion, LOG_LEVEL_INF);
 
-void fusion_init(float g_time, float a_time, float m_time)
+void fusion_init(float g_time, float a_time, float m_time, float gyro_range_dps)
 {
 	unsigned int rate = 1.0f / g_time;
 	FusionOffsetInitialise2(&offset, rate);
@@ -44,7 +44,7 @@ void fusion_init(float g_time, float a_time, float m_time)
 	const FusionAhrsSettings settings = {
 			.convention = FusionConventionNwu,
 			.gain = 0.5f,
-			.gyroscopeRange = 2000.0f, // also change gyro range in fusion! (.. does it actually work if its set to the limit?)
+			.gyroscopeRange = gyro_range_dps,
 			.accelerationRejection = 10.0f,
 			.magneticRejection = 20.0f,
 			.recoveryTriggerPeriod = 5 * rate, // 5 seconds

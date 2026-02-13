@@ -25,7 +25,7 @@
 
 #include "sensor/sensor.h"
 
-void fusion_init(float g_time, float a_time, float m_time);
+void fusion_init(float g_time, float a_time, float m_time, float gyro_range_dps);
 void fusion_load(const void *data);
 void fusion_save(void *data);
 

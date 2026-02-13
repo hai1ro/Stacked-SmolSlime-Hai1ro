@@ -50,7 +50,7 @@ void main_imu_wakeup(void);
 void main_imu_restart(void);
 
 typedef struct sensor_fusion {
-	void (*init)(float, float, float); // gyro_time, accel_time, mag_time
+	void (*init)(float, float, float, float); // gyro_time, accel_time, mag_time, gyro_range_dps
 	void (*load)(const void *);
 	void (*save)(void *);
 

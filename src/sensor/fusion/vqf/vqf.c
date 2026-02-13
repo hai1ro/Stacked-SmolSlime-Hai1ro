@@ -66,7 +66,7 @@ static void set_params()
 	params.tauAcc = 4.337983;
 }
 
-void vqf_init(float g_time, float a_time, float m_time)
+void vqf_init(float g_time, float a_time, float m_time, float gyro_range_dps)
 {
 	set_params();
 	initVqf(&params, &state, &coeffs, g_time, a_time, m_time);

@@ -4,7 +4,7 @@
 
 LOG_MODULE_REGISTER(fusion_none, LOG_LEVEL_INF);
 
-void fusion_none_init(float g_time, float a_time, float m_time)
+void fusion_none_init(float g_time, float a_time, float m_time, float gyro_range_dps)
 {
 	LOG_DBG("fusion_none_init");
 }

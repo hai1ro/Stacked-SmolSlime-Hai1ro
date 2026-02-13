@@ -691,7 +691,7 @@ int sensor_init(void)
 	}
 	else
 	{
-		sensor_fusion->init(gyro_actual_time, accel_actual_time, mag_initial_time); // TODO: using initial time since mag are not polled at the actual rate
+		sensor_fusion->init(gyro_actual_time, accel_actual_time, mag_initial_time, gyro_actual_range); // TODO: using initial time since mag are not polled at the actual rate
 	}
 
 	sensor_calibration_update_sensor_ids(sensor_imu_id);
@@ -849,14 +849,32 @@ void sensor_loop(void)
 			int a_count = 0;
 			max_gyro_speed_square = 0;
 			int processed_packets = 0;
+			int skipped_packets = 0;
+			float last_valid_g[3] = {0};
+			float last_valid_a[3] = {0};
+			bool has_valid_data = false;
+			
 			for (uint16_t i = 0; i < packets; i++)
 			{
 				float raw_a[3] = {0};
 				float raw_g[3] = {0};
 				if (sensor_imu->fifo_process(i, raw_data, raw_a, raw_g))
-					continue; // skip on error
+				{
+					skipped_packets++;
+					if (has_valid_data)
+					{
+						if (raw_g[0] == 0 && raw_g[1] == 0 && raw_g[2] == 0)
+						{
+							memcpy(raw_g, last_valid_g, sizeof(raw_g));
+						}
+						if (raw_a[0] == 0 && raw_a[1] == 0 && raw_a[2] == 0)
+						{
+							memcpy(raw_a, last_valid_a, sizeof(raw_a));
+						}
+					}
+					continue;
+				}
 
-				// TODO: split into separate functions
 				if (raw_g[0] != 0 || raw_g[1] != 0 || raw_g[2] != 0)
 				{
 #if DEBUG
@@ -869,20 +887,20 @@ void sensor_loop(void)
 					float gz = raw_g[2];
 					float g[] = {gx, gy, gz};
 
-					// Process fusion
+					memcpy(last_valid_g, g, sizeof(last_valid_g));
+					has_valid_data = true;
+
 					sensor_fusion->update_gyro(g, gyro_actual_time);
 
 					g_count++;
 
 					if (mag_available && mag_enabled)
 					{
-						// Get fusion's corrected gyro data (or get gyro bias from fusion) and use it here
 						float g_off[3] = {};
 						sensor_fusion->get_gyro_bias(g_off);
 						for (int i = 0; i < 3; i++)
 							g_off[i] = g[i] - g_off[i];
 
-						// Get the highest gyro speed
 						float gyro_speed_square = g_off[0] * g_off[0] + g_off[1] * g_off[1] + g_off[2] * g_off[2];
 						if (gyro_speed_square > max_gyro_speed_square)
 							max_gyro_speed_square = gyro_speed_square;
@@ -901,7 +919,8 @@ void sensor_loop(void)
 					float az = raw_a[2];
 					float a[] = {ax, ay, az};
 
-					// Process fusion
+					memcpy(last_valid_a, a, sizeof(last_valid_a));
+
 					sensor_fusion->update_accel(a, accel_actual_time);
 
 					for (int i = 0; i < 3; i++)
@@ -910,6 +929,15 @@ void sensor_loop(void)
 				}
 
 				processed_packets++;
+			}
+
+			if (skipped_packets > 0 && skipped_packets < 10)
+			{
+				LOG_DBG("Skipped %d FIFO packets, using last valid data", skipped_packets);
+			}
+			else if (skipped_packets >= 10)
+			{
+				LOG_WRN("Skipped %d FIFO packets, possible data corruption", skipped_packets);
 			}
 
 			// If sensors have asymmetric packets in FIFO, timesteps will not match packet count
@@ -1151,5 +1179,8 @@ void main_imu_wakeup(void)
 void main_imu_restart(void)
 {
 	if (main_ok) // only restart fusion if initialized
-		sensor_fusion->init(gyro_actual_time, accel_actual_time, 6 / 1000.0f); // TODO: using default initial time
+	{
+		float gyro_range = CONFIG_2_SETTINGS_READ(CONFIG_2_SENSOR_GYRO_FS);
+		sensor_fusion->init(gyro_actual_time, accel_actual_time, 6 / 1000.0f, gyro_range); // TODO: using default initial time
+	}
 }
