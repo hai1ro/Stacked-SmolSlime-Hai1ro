@@ -161,16 +161,31 @@ void connection_update_button(int button)
 	button_update_time = k_uptime_get();
 }
 
-//|b0      |b1      |b2      |b3      |b4      |b5      |b6      |b7      |b8      |b9      |b10     |b11     |b12     |b13     |b14     |b15     |
-//|type    |id      |packet data                                                                                                                  |
-//|0       |id      |batt    |batt_v  |temp    |brd_id  |mcu_id  |resv    |imu_id  |mag_id  |fw_date          |major   |minor   |patch   |rssi    |
-//|1       |id      |q0               |q1               |q2               |q3               |a0               |a1               |a2               |
-//|2       |id      |batt    |batt_v  |temp    |q_buf                              |a0               |a1               |a2               |rssi    |
-//|3	   |id      |svr_stat|status  |resv                                                                                              |rssi    |
-//|4       |id      |q0               |q1               |q2               |q3               |m0               |m1               |m2               |
-//|5	   |id      |runtime                                                                |resv                                        |rssi    |
-//|6       |id      |button  |resv                                                                                                       |rssi    |
-//|7       |id      |button  |resv             |q_buf                              |a0               |a1               |a2               |rssi    |
+/*
+ * Packet Protocol (16 bytes total)
+ * +----+------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+
+ * | b0 |  b1  | b2       | b3       | b4       | b5       | b6       | b7       | b8       | b9       | b10      | b11      | b12      | b13      | b14      | b15      |
+ * +----+------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+
+ * |type|  id  | packet data                                                                                                                                             |
+ * +----+------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+
+ * | 0  |  id  | batt     | batt_v   | temp     | brd_id   | mcu_id   | resv     | imu_id   | mag_id   | fw_date             | major    | minor    | patch    | rssi     |
+ * +----+------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+
+ * | 1  |  id  | q0                  | q1                  | q2                  | q3                  | a0                  | a1                  | a2                  |
+ * +----+------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+
+ * | 2  |  id  | batt     | batt_v   | temp     | q_buf                                     | a0                  | a1                  | a2                  | rssi     |
+ * +----+------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+
+ * | 3  |  id  | svr_stat | status   | pkt_rec  | pkt_lost | win_hit  | win_miss | resv                                                                       | rssi     |
+ * +----+------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+
+ * | 4  |  id  | q0                  | q1                  | q2                  | q3                  | m0                  | m1                  | m2                  |
+ * +----+------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+
+ * | 5  |  id  | runtime                                                                               | resv                                                            |
+ * +----+------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+
+ * | 6  |  id  | button   | resv                                                                                                                              | rssi     |
+ * +----+------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+
+ * | 7  |  id  | button   | resv                |   q_buf                                   | a0                  | a1                  | a2                  | rssi     |
+ * +----+------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+----------+
+ */
+
 
 void connection_write_packet_0() // device info
 {
@@ -264,6 +279,17 @@ void connection_write_packet_3() // status
 	data[1] = tracker_id;
 	data[2] = tracker_svr_status;
 	data[3] = tracker_status;
+	data[4] = 0; // packets_received - placeholder (filled by receiver)
+	data[5] = 0; // packets_lost - placeholder (filled by receiver)
+	data[6] = 0; // windows_hit - placeholder (filled by receiver)
+	data[7] = 0; // windows_missed - placeholder (filled by receiver)
+	data[8] = 0; // reserved
+	data[9] = 0; // reserved
+	data[10] = 0; // reserved
+	data[11] = 0; // reserved
+	data[12] = 0; // reserved
+	data[13] = 0; // reserved
+	data[14] = 0; // reserved
 	data[15] = 0; // rssi (supplied by receiver)
 	k_mutex_lock(&data_buffer_mutex, K_FOREVER);
 	memcpy(data_buffer, data, sizeof(data));
@@ -273,19 +299,19 @@ void connection_write_packet_3() // status
 	hid_write_packet_n(data); // TODO:
 }
 
-void connection_write_packet_4() // full precision quat and magnetometer
+void connection_write_packet_4() // full precision quat and mag
 {
 	uint8_t data[16] = {0};
 	data[0] = 4; // packet 4
 	data[1] = tracker_id;
 	uint16_t *buf = (uint16_t *)&data[2];
-	buf[0] = TO_FIXED_15(sensor_q[1]);
-	buf[1] = TO_FIXED_15(sensor_q[2]);
-	buf[2] = TO_FIXED_15(sensor_q[3]);
-	buf[3] = TO_FIXED_15(sensor_q[0]);
-	buf[4] = TO_FIXED_10(sensor_m[0]); // range is ±32G
-	buf[5] = TO_FIXED_10(sensor_m[1]);
-	buf[6] = TO_FIXED_10(sensor_m[2]);
+	buf[0] = TO_FIXED_15(sensor_q[1]); // q0 (x)
+	buf[1] = TO_FIXED_15(sensor_q[2]); // q1 (y)
+	buf[2] = TO_FIXED_15(sensor_q[3]); // q2 (z)
+	buf[3] = TO_FIXED_15(sensor_q[0]); // q3 (w)
+	buf[4] = TO_FIXED_10(sensor_m[0]); // m0 
+	buf[5] = TO_FIXED_10(sensor_m[1]); // m1
+	buf[6] = TO_FIXED_10(sensor_m[2]); // m2
 	k_mutex_lock(&data_buffer_mutex, K_FOREVER);
 	memcpy(data_buffer, data, sizeof(data));
 	last_data_time = k_uptime_get(); // TODO: use ticks
@@ -293,6 +319,8 @@ void connection_write_packet_4() // full precision quat and magnetometer
 	k_mutex_unlock(&data_buffer_mutex);
 	hid_write_packet_n(data); // TODO:
 }
+
+
 
 void connection_write_packet_5() // runtime
 {
@@ -312,7 +340,7 @@ void connection_write_packet_5() // runtime
 	hid_write_packet_n(data); // TODO:
 }
 
-void connection_write_packet_6() // reduced precision quat and accel with button
+void connection_write_packet_6() // button only
 {
 	uint8_t data[16] = {0};
 	data[0] = 6; // packet 6
@@ -332,7 +360,7 @@ void connection_write_packet_6() // reduced precision quat and accel with button
 	hid_write_packet_n(data); // TODO:
 }
 
-void connection_write_packet_7() // button
+void connection_write_packet_7() // button with reduced precision quat and accel
 {
 	uint8_t data[16] = {0};
 	data[0] = 7; // packet 7
@@ -396,12 +424,12 @@ void connection_thread(void)
 			*crc_ptr = crc32_k_4_2_update(0x93a409eb, data_copy, 16);
 			esb_write(data_copy);
 		}
-		// mag is higher priority (skip accel, quat is full precision)
-		else if (mag_update_time && k_uptime_get() - last_mag_time > 200)
+		// mag is lower priority - send less frequently to save power
+		else if (mag_update_time && k_uptime_get() - last_mag_time > 1000)
 		{
 			mag_update_time = 0; // data has been sent
 			last_mag_time = k_uptime_get();
-			connection_write_packet_4();
+			connection_write_packet_4(); // Type 4: quat + magnetometer
 			continue;
 		}
 		// if time for info and precise quat not needed
@@ -430,13 +458,13 @@ void connection_thread(void)
 			connection_write_packet_1();
 			continue;
 		}
-		else if (k_uptime_get() - last_info_time > 100)
+		else if (k_uptime_get() - last_info_time > 1000) // Increased from 100ms to 1000ms
 		{
 			last_info_time = k_uptime_get();
 			connection_write_packet_0();
 			continue;
 		}
-		else if (use_button && k_uptime_get() - last_info2_time > 100)
+		else if (use_button && k_uptime_get() - last_info2_time > 1000) // Increased from 100ms to 1000ms
 		{
 			last_info2_time = k_uptime_get();
 			connection_write_packet_6();
@@ -457,6 +485,8 @@ void connection_thread(void)
 		else
 		{
 			connection_clocks_request_stop();
+			// Increase sleep time when no data to send to reduce TPS
+			k_msleep(10); // Increased from 1ms to 10ms to reduce idle loop frequency
 		}
 		k_msleep(1); // TODO: should be getting timing from receiver, for now just send asap
 	}
