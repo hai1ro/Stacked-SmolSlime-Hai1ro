@@ -552,6 +552,8 @@ enum sensor_sensor_mode {
 
 static enum sensor_sensor_mode sensor_mode = SENSOR_SENSOR_MODE_LOW_NOISE;
 static enum sensor_sensor_mode last_sensor_mode = SENSOR_SENSOR_MODE_LOW_NOISE;
+static int64_t last_mode_switch_time = 0;
+#define MODE_SWITCH_HYSTERESIS_MS 2000
 
 enum sensor_sensor_timeout {
 	SENSOR_SENSOR_TIMEOUT_IMU,
@@ -568,21 +570,34 @@ static enum sensor_sensor_timeout sensor_timeout = SENSOR_SENSOR_TIMEOUT_IMU;
 static void sensor_update_sensor_state(void)
 {
 	bool calibrating = get_status(SYS_STATUS_CALIBRATION_RUNNING);
-	bool resting = sensor_fusion->get_gyro_sanity() == 0 ? q_epsilon(q, last_q, 0.005) : q_epsilon(q, last_q, 0.05); // TODO: Probably okay to use the constantly updating last_q?
+	bool resting = sensor_fusion->get_gyro_sanity() == 0 ? q_epsilon(q, last_q, 0.005) : q_epsilon(q, last_q, 0.05);
+	int64_t current_time = k_uptime_get();
+	int64_t time_since_last_switch = current_time - last_mode_switch_time;
+	
 	if (!calibrating && resting)
 	{
-		int64_t last_data_delta = k_uptime_get() - last_data_time;
-		if (sensor_mode < SENSOR_SENSOR_MODE_LOW_POWER && last_data_delta > CONFIG_3_SETTINGS_READ(CONFIG_3_SENSOR_LP_TIMEOUT)) // No motion in lp timeout
+		int64_t last_data_delta = current_time - last_data_time;
+		if (sensor_mode < SENSOR_SENSOR_MODE_LOW_POWER && last_data_delta > CONFIG_3_SETTINGS_READ(CONFIG_3_SENSOR_LP_TIMEOUT))
 		{
-			LOG_INF("No motion from sensors in %dms", CONFIG_3_SETTINGS_READ(CONFIG_3_SENSOR_LP_TIMEOUT));
-			sensor_mode = SENSOR_SENSOR_MODE_LOW_POWER;
+			if (time_since_last_switch > MODE_SWITCH_HYSTERESIS_MS)
+			{
+				LOG_INF("No motion from sensors in %dms", CONFIG_3_SETTINGS_READ(CONFIG_3_SENSOR_LP_TIMEOUT));
+				sensor_mode = SENSOR_SENSOR_MODE_LOW_POWER;
+				last_mode_switch_time = current_time;
+			}
 		}
-		int64_t imu_timeout = CLAMP(last_data_time - last_suspend_attempt_time, CONFIG_3_SETTINGS_READ(CONFIG_3_IMU_TIMEOUT_RAMP_MIN), CONFIG_3_SETTINGS_READ(CONFIG_3_IMU_TIMEOUT_RAMP_MAX)); // Ramp timeout from last_data_time
-		if (CONFIG_1_SETTINGS_READ(CONFIG_1_SENSOR_USE_LOW_POWER_2) && sensor_mode < SENSOR_SENSOR_MODE_LOW_POWER_2 && last_data_delta > imu_timeout) // No motion in ramp time
-			sensor_mode = SENSOR_SENSOR_MODE_LOW_POWER_2;
+		int64_t imu_timeout = CLAMP(last_data_time - last_suspend_attempt_time, CONFIG_3_SETTINGS_READ(CONFIG_3_IMU_TIMEOUT_RAMP_MIN), CONFIG_3_SETTINGS_READ(CONFIG_3_IMU_TIMEOUT_RAMP_MAX));
+		if (CONFIG_1_SETTINGS_READ(CONFIG_1_SENSOR_USE_LOW_POWER_2) && sensor_mode < SENSOR_SENSOR_MODE_LOW_POWER_2 && last_data_delta > imu_timeout)
+		{
+			if (time_since_last_switch > MODE_SWITCH_HYSTERESIS_MS)
+			{
+				sensor_mode = SENSOR_SENSOR_MODE_LOW_POWER_2;
+				last_mode_switch_time = current_time;
+			}
+		}
 		if (CONFIG_1_SETTINGS_READ(CONFIG_1_USE_ACTIVE_TIMEOUT))
 		{
-			if (sensor_timeout < SENSOR_SENSOR_TIMEOUT_ACTIVITY && last_data_delta > CONFIG_3_SETTINGS_READ(CONFIG_3_ACTIVE_TIMEOUT_THRESHOLD)) // higher priority than IMU timeout
+			if (sensor_timeout < SENSOR_SENSOR_TIMEOUT_ACTIVITY && last_data_delta > CONFIG_3_SETTINGS_READ(CONFIG_3_ACTIVE_TIMEOUT_THRESHOLD))
 			{
 				LOG_INF("Switching to activity timeout");
 				sensor_timeout = SENSOR_SENSOR_TIMEOUT_ACTIVITY;
@@ -590,31 +605,32 @@ static void sensor_update_sensor_state(void)
 			if (sensor_timeout == SENSOR_SENSOR_TIMEOUT_ACTIVITY && last_data_delta > CONFIG_3_SETTINGS_READ(CONFIG_3_ACTIVE_TIMEOUT_DELAY))
 			{
 				LOG_INF("No motion from sensors in %dm", CONFIG_3_SETTINGS_READ(CONFIG_3_ACTIVE_TIMEOUT_DELAY) / 60000);
-				// Queue power state request, it is possible for the request to be overridden so the thread may continue unaware
 				if (CONFIG_2_SETTINGS_READ(CONFIG_2_ACTIVE_TIMEOUT_MODE) == 0 && CONFIG_0_SETTINGS_READ(CONFIG_0_USE_IMU_WAKE_UP))
 					sys_request_WOM(true, false);
-				// Queue power state request, thread will be suspended when entering system_off
 				if (CONFIG_2_SETTINGS_READ(CONFIG_2_ACTIVE_TIMEOUT_MODE) == 1 && CONFIG_0_SETTINGS_READ(CONFIG_0_USER_SHUTDOWN))
 					sys_request_system_off(false);
-				sensor_timeout = SENSOR_SENSOR_TIMEOUT_ACTIVITY_ELAPSED; // only try to suspend once
+				sensor_timeout = SENSOR_SENSOR_TIMEOUT_ACTIVITY_ELAPSED;
 			}
 		}
-		if (CONFIG_1_SETTINGS_READ(CONFIG_1_USE_IMU_TIMEOUT) && CONFIG_0_SETTINGS_READ(CONFIG_0_USE_IMU_WAKE_UP) && sensor_timeout == SENSOR_SENSOR_TIMEOUT_IMU && last_data_delta > imu_timeout) // No motion in ramp time
+		if (CONFIG_1_SETTINGS_READ(CONFIG_1_USE_IMU_TIMEOUT) && CONFIG_0_SETTINGS_READ(CONFIG_0_USE_IMU_WAKE_UP) && sensor_timeout == SENSOR_SENSOR_TIMEOUT_IMU && last_data_delta > imu_timeout)
 		{
 			LOG_INF("No motion from sensors in %llds", imu_timeout / 1000);
-			// Queue power state request
 			sys_request_WOM(false, false);
-			sensor_timeout = SENSOR_SENSOR_TIMEOUT_IMU_ELAPSED; // only try to suspend once
+			sensor_timeout = SENSOR_SENSOR_TIMEOUT_IMU_ELAPSED;
 		}
 	}
 	else
 	{
 		if (sensor_mode == SENSOR_SENSOR_MODE_LOW_POWER_2 || sensor_timeout == SENSOR_SENSOR_TIMEOUT_IMU_ELAPSED)
-			last_suspend_attempt_time = k_uptime_get();
-		last_data_time = k_uptime_get();
-		if (sensor_timeout == SENSOR_SENSOR_TIMEOUT_IMU_ELAPSED) // Resetting IMU timeout
+			last_suspend_attempt_time = current_time;
+		last_data_time = current_time;
+		if (sensor_timeout == SENSOR_SENSOR_TIMEOUT_IMU_ELAPSED)
 			sensor_timeout = SENSOR_SENSOR_TIMEOUT_IMU;
-		sensor_mode = SENSOR_SENSOR_MODE_LOW_NOISE;
+		if (sensor_mode != SENSOR_SENSOR_MODE_LOW_NOISE && time_since_last_switch > MODE_SWITCH_HYSTERESIS_MS)
+		{
+			sensor_mode = SENSOR_SENSOR_MODE_LOW_NOISE;
+			last_mode_switch_time = current_time;
+		}
 	}
 }
 
@@ -821,6 +837,12 @@ void sensor_loop(void)
 
 			if (reconfig) // TODO: get rid of reconfig?
 			{
+				uint16_t flush_packets = sensor_imu->fifo_read(raw_data, data_size);
+				if (flush_packets > 0)
+				{
+					LOG_DBG("Flushed %d FIFO packets before mode switch", flush_packets);
+				}
+				
 				// Changing FIFO threshold here should be fine since FIFO is empty now
 				// TODO: causing warnings since packet processing and loop timing still expects previous update_time
 				switch (sensor_mode)
